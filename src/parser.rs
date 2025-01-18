@@ -22,6 +22,7 @@ pub struct Expected {
 
 #[derive(thiserror::Error, Debug, miette::Diagnostic)]
 #[error("unexpected '{token}'")]
+#[diagnostic(code(Parser::unexpected))]
 pub struct Unexpected {
   pub token: TokenKind,
 
@@ -381,7 +382,10 @@ mod test {
   #[test]
   fn parser_test() {
     let src = r#"
-macro letfn name params body = let name = params => body
+macro letfn name params body = {
+  !
+}
+  let name = params => body
 
       {
     let f = x => y z => y 2 3

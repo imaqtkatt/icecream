@@ -4,6 +4,12 @@ pub struct Tree {
   pub loc: crate::loc::Loc,
 }
 
+impl Tree {
+  pub fn new(tree_kind: TreeKind, loc: crate::loc::Loc) -> Self {
+    Self { tree_kind, loc }
+  }
+}
+
 impl std::fmt::Debug for Tree {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     write!(f, "{:?}", self.tree_kind)
