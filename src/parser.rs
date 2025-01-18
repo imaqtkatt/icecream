@@ -7,10 +7,6 @@ use crate::{
 
 type ParseResult<T> = miette::Result<T>;
 
-pub enum ParseError {
-  Expected(Expected),
-}
-
 #[derive(thiserror::Error, Debug, miette::Diagnostic)]
 #[error("expected '{expected}'")]
 #[diagnostic(code(Parser::expected))]
@@ -148,7 +144,7 @@ impl<'src> Parser<'src> {
       TokenKind::RParens | TokenKind::RBrace | TokenKind::Separator => Precedence::End,
 
       // TODO: fixme
-      TokenKind::Equal => panic!("unexpected"),
+      TokenKind::Equal => Precedence::End,
 
       TokenKind::FatArrow => Precedence::Lambda,
 
@@ -164,6 +160,7 @@ impl<'src> Parser<'src> {
       | TokenKind::True
       | TokenKind::False
       | TokenKind::Let
+      | TokenKind::Macro
       | TokenKind::LParens
       | TokenKind::LBrace => Precedence::Call,
 
@@ -180,7 +177,7 @@ impl<'src> Parser<'src> {
       TokenKind::LParens => {
         self.expect(TokenKind::LParens)?;
         let expr = self.expression(Precedence::None.left())?;
-        self.expected(TokenKind::RParens)?;
+        self.expect(TokenKind::RParens)?;
         Ok(expr)
       }
       TokenKind::LBrace => {
@@ -214,11 +211,16 @@ impl<'src> Parser<'src> {
     }
   }
 
-  fn identifier(&mut self) -> ParseResult<crate::parse_tree::Tree> {
+  fn name(&mut self) -> ParseResult<(Name, crate::loc::Loc)> {
     let token = self.expect(TokenKind::Identifier)?;
+    Ok((Name::from(token.lexeme), token.loc))
+  }
+
+  fn identifier(&mut self) -> ParseResult<crate::parse_tree::Tree> {
+    let (name, loc) = self.name()?;
     Ok(crate::parse_tree::Tree {
-      tree_kind: TreeKind::Variable(Name::from(token.lexeme)),
-      loc: token.loc,
+      tree_kind: TreeKind::Variable(name),
+      loc,
     })
   }
 
@@ -300,22 +302,23 @@ impl<'src> Parser<'src> {
     let rhs = self.expression(Precedence::Call.left())?;
     let rhs_loc = rhs.loc.clone();
 
-    let mut spine = match lhs.tree_kind {
-      TreeKind::Spine(exprs) => exprs,
-      _ => vec![lhs],
+    let (callee, mut spine) = match lhs.tree_kind {
+      TreeKind::Spine(callee, exprs) => (*callee, exprs),
+      _ => (lhs, vec![]),
     };
 
     spine.push(rhs);
 
     Ok(crate::parse_tree::Tree {
-      tree_kind: TreeKind::Spine(spine),
+      tree_kind: TreeKind::Spine(callee.into(), spine),
       loc: lhs_loc.merge(rhs_loc),
     })
   }
 
   fn expression(&mut self, prec: Precedence) -> ParseResult<crate::parse_tree::Tree> {
     match self.skip_peek() {
-      TokenKind::Let if prec == Precedence::None => self.r#let(),
+      TokenKind::Let => self.r#let(),
+      TokenKind::Macro if prec == Precedence::None => self.r#macro(),
       _ => self.infix(prec),
     }
   }
@@ -333,6 +336,26 @@ impl<'src> Parser<'src> {
     Ok(crate::parse_tree::Tree {
       tree_kind: TreeKind::Let(ident.into(), value.into()),
       loc: start.loc.merge(end),
+    })
+  }
+
+  fn r#macro(&mut self) -> ParseResult<crate::parse_tree::Tree> {
+    let start = self.expect(TokenKind::Macro)?;
+
+    let (name, _) = self.name()?;
+
+    let mut parameters = vec![];
+    while !self.is(TokenKind::Equal) {
+      parameters.push(self.primary()?);
+    }
+    self.expect(TokenKind::Equal)?;
+
+    let body = self.expression(Precedence::None.left())?;
+    let loc = start.loc.merge(body.loc.clone());
+
+    Ok(crate::parse_tree::Tree {
+      tree_kind: TreeKind::Macro(name, parameters, body.into()),
+      loc,
     })
   }
 
@@ -358,6 +381,8 @@ mod test {
   #[test]
   fn parser_test() {
     let src = r#"
+macro letfn name params body = let name = params => body
+
       {
     let f = x => y z => y 2 3
     4
@@ -373,7 +398,7 @@ mod test {
       start: 0,
     };
     let mut parser = Parser::new(lexer);
-    match parser.expression(super::Precedence::None) {
+    match parser.parse_program() {
       Ok(tree) => println!("{tree:?}"),
       Err(e) => eprintln!("{e}"),
     }

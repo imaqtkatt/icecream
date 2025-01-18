@@ -1,4 +1,4 @@
-// #[derive(Debug)]
+#[derive(Clone)]
 pub struct Tree {
   pub tree_kind: TreeKind,
   pub loc: crate::loc::Loc,
@@ -15,25 +15,26 @@ pub struct Program {
   pub trees: Vec<Tree>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum TreeKind {
   Variable(crate::loc::Name),
   Literal(Literal),
-  Spine(Vec<Tree>),
+  Spine(Box<Tree>, Vec<Tree>),
   Binary(Op, Box<Tree>, Box<Tree>),
   Lambda(Box<Tree>, Box<Tree>),
   Let(Box<Tree>, Box<Tree>),
+  Macro(crate::loc::Name, Vec<Tree>, Box<Tree>),
   Block(Vec<Tree>),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Literal {
   Number(i32),
   Boolean(bool),
   String(crate::loc::Text),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Op {
   Equal,
   NotEqual,

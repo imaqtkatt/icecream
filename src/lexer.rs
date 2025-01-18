@@ -131,6 +131,7 @@ impl<'src> Lexer<'src> {
             "true" => crate::token::TokenKind::True,
             "false" => crate::token::TokenKind::False,
             "let" => crate::token::TokenKind::Let,
+            "macro" => crate::token::TokenKind::Macro,
             "and" => crate::token::TokenKind::And,
             "or" => crate::token::TokenKind::Or,
             _ => crate::token::TokenKind::Identifier,
