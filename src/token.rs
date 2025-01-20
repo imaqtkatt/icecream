@@ -59,7 +59,7 @@ impl std::fmt::Display for TokenKind {
       TokenKind::Star => write!(f, "star"),
       TokenKind::Slash => write!(f, "slash"),
       TokenKind::Percent => write!(f, "percent"),
-      TokenKind::Separator => write!(f, "separator (\\n or )"),
+      TokenKind::Separator => write!(f, "separator (\\n or ;)"),
       TokenKind::Error => write!(f, "error"),
       TokenKind::Eof => write!(f, "end of file"),
     }

@@ -126,7 +126,7 @@ impl<'src> Lexer<'src> {
           crate::token::TokenKind::Number
         }
         'a'..='z' | 'A'..='Z' => {
-          self.advance_while(|c| c.is_ascii_alphanumeric());
+          self.advance_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-');
           match self.lexeme() {
             "true" => crate::token::TokenKind::True,
             "false" => crate::token::TokenKind::False,

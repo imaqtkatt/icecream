@@ -1,3 +1,14 @@
+#[derive(Debug)]
+pub struct Program {
+  pub top_levels: Vec<TopLevel>,
+}
+
+#[derive(Clone, Debug)]
+pub enum TopLevel {
+  Macro(crate::loc::Name, Vec<crate::loc::Name>, Tree),
+  Tree(Tree),
+}
+
 #[derive(Clone)]
 pub struct Tree {
   pub tree_kind: TreeKind,
@@ -16,11 +27,6 @@ impl std::fmt::Debug for Tree {
   }
 }
 
-#[derive(Debug)]
-pub struct Program {
-  pub trees: Vec<Tree>,
-}
-
 #[derive(Clone, Debug)]
 pub enum TreeKind {
   Variable(crate::loc::Name),
@@ -29,7 +35,6 @@ pub enum TreeKind {
   Binary(Op, Box<Tree>, Box<Tree>),
   Lambda(Box<Tree>, Box<Tree>),
   Let(Box<Tree>, Box<Tree>),
-  Macro(crate::loc::Name, Vec<Tree>, Box<Tree>),
   Block(Vec<Tree>),
 }
 

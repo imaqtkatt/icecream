@@ -1,3 +1,4 @@
+mod compiler;
 pub mod lexer;
 pub mod loc;
 pub mod parse_tree;

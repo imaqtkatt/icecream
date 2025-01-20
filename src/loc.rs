@@ -60,6 +60,18 @@ impl Source {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Name(std::rc::Rc<String>);
 
+impl std::borrow::Borrow<str> for Name {
+  fn borrow(&self) -> &str {
+    &self.0
+  }
+}
+
+impl std::borrow::Borrow<String> for Name {
+  fn borrow(&self) -> &String {
+    &self.0
+  }
+}
+
 impl From<String> for Name {
   fn from(value: String) -> Self {
     Self(std::rc::Rc::new(value))
@@ -74,6 +86,12 @@ impl AsRef<String> for Name {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Text(std::rc::Rc<String>);
+
+impl std::fmt::Display for Text {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.0)
+  }
+}
 
 impl From<String> for Text {
   fn from(value: String) -> Self {
@@ -104,5 +122,11 @@ impl From<Loc> for miette::SourceSpan {
   fn from(loc: Loc) -> Self {
     let length = loc.end - loc.start;
     miette::SourceSpan::new(miette::SourceOffset::from(loc.start), length)
+  }
+}
+
+impl std::fmt::Display for Name {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.0)
   }
 }

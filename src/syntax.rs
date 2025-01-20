@@ -1,73 +1,76 @@
 use std::collections::HashMap;
 
-use crate::loc::Name;
+use crate::{loc::Name, parse_tree};
 
 #[derive(Debug)]
-pub enum Syntax<Ext = ()> {
-  Variable(crate::loc::Name),
-  Literal(crate::parse_tree::Literal),
-  Call(Box<Syntax<Ext>>, Box<Syntax<Ext>>),
-  Binary(crate::parse_tree::Op, Box<Syntax<Ext>>, Box<Syntax<Ext>>),
-  Lambda(LambdaPattern, Box<Syntax<Ext>>),
-  Let(crate::loc::Name, Box<Syntax<Ext>>),
-  Block(Vec<Syntax<Ext>>),
+pub enum Syntax<Id = crate::loc::Name, Ext = ()> {
+  Variable(Id),
+  Literal(parse_tree::Literal),
+  Call(Box<Syntax<Id, Ext>>, Box<Syntax<Id, Ext>>),
+  Binary(parse_tree::Op, Box<Syntax<Id, Ext>>, Box<Syntax<Id, Ext>>),
+  Lambda(Id, Box<Syntax<Id, Ext>>),
+  Let(Id, Box<Syntax<Id, Ext>>),
+  Block(Vec<Syntax<Id, Ext>>),
   Ext(Ext),
 }
 
 #[derive(Debug)]
-pub enum LambdaPattern {
-  Variable(crate::loc::Name),
+pub enum LambdaPattern<Id = crate::loc::Name> {
+  Variable(Id),
   Many(Vec<LambdaPattern>),
 }
 
-type ExpandedTree = Syntax<MacroDefined>;
+pub type ExpandedTree = Syntax<crate::loc::Name, ()>;
 
-pub fn program_to_expanded_tree(
-  program: crate::parse_tree::Program,
-) -> miette::Result<ExpandedTree> {
+pub fn program_to_expanded_tree(program: parse_tree::Program) -> miette::Result<ExpandedTree> {
   let mut macros = HashMap::new();
 
-  let syntaxes = (program.trees)
-    .into_iter()
-    .map(|tree| tree.to_syntax(&mut macros))
-    .collect::<Result<_, _>>()?;
+  let mut syntaxes = vec![];
+
+  for top_level in program.top_levels.into_iter() {
+    match top_level {
+      parse_tree::TopLevel::Macro(name, parameters, body) => {
+        macros.insert(name, Macro::new(parameters, body));
+      }
+      parse_tree::TopLevel::Tree(tree) => {
+        syntaxes.push(tree.to_syntax(&mut macros)?);
+      }
+    }
+  }
 
   Ok(Syntax::Block(syntaxes))
 }
 
-#[derive(Debug)]
-pub struct MacroDefined;
-
 struct Macro {
   parameters: Vec<Name>,
-  tree: crate::parse_tree::Tree,
+  tree: parse_tree::Tree,
 }
 
 impl Macro {
-  fn new(parameters: Vec<Name>, tree: crate::parse_tree::Tree) -> Self {
+  fn new(parameters: Vec<Name>, tree: parse_tree::Tree) -> Self {
     Self { parameters, tree }
   }
 }
 
-#[derive(Default)]
-pub struct Environment {
-  bindings: HashMap<Name, crate::parse_tree::Tree>,
-  namegen: usize,
-}
+// #[derive(Default)]
+// pub struct Environment {
+//   bindings: HashMap<Name, crate::parse_tree::Tree>,
+//   namegen: usize,
+// }
 
-impl Environment {
-  pub fn new() -> Self {
-    Self::default()
-  }
+// impl Environment {
+//   pub fn new() -> Self {
+//     Self::default()
+//   }
 
-  pub fn insert(&mut self, name: Name, tree: crate::parse_tree::Tree) {
-    self.bindings.insert(name, tree);
-  }
+//   pub fn insert(&mut self, name: Name, tree: crate::parse_tree::Tree) {
+//     self.bindings.insert(name, tree);
+//   }
 
-  pub fn get(&mut self, name: &Name) -> Option<&crate::parse_tree::Tree> {
-    self.bindings.get(name)
-  }
-}
+//   pub fn get(&mut self, name: &Name) -> Option<&crate::parse_tree::Tree> {
+//     self.bindings.get(name)
+//   }
+// }
 
 #[derive(thiserror::Error, Debug, miette::Diagnostic)]
 #[diagnostic()]
@@ -104,56 +107,70 @@ pub struct BindNotValid {
   src: crate::loc::Source,
 }
 
+fn mangle(name: &Name, bindings: &HashMap<Name, parse_tree::Tree>) -> Name {
+  let mut counter = 0;
+  let mut base = format!("{name}_{counter}");
+
+  while bindings.contains_key(&base) {
+    counter += 1;
+    base = format!("{name}_{counter}");
+  }
+
+  Name::from(base)
+}
+
 impl Macro {
   fn expand(
-    tree: crate::parse_tree::Tree,
-    bindings: &HashMap<Name, crate::parse_tree::Tree>,
-  ) -> miette::Result<crate::parse_tree::Tree> {
+    tree: parse_tree::Tree,
+    bindings: &mut HashMap<Name, parse_tree::Tree>,
+  ) -> miette::Result<parse_tree::Tree> {
     match tree.tree_kind {
-      crate::parse_tree::TreeKind::Variable(ref name) => match bindings.get(name) {
+      parse_tree::TreeKind::Variable(ref name) => match bindings.get(name) {
         Some(tree) => Ok(tree.clone()),
-        None => Ok(tree),
+        None => {
+          let mangled = mangle(name, bindings);
+          let tree_kind = parse_tree::TreeKind::Variable(mangled);
+          let tree = parse_tree::Tree::new(tree_kind, tree.loc);
+          bindings.insert(name.clone(), tree.clone());
+          Ok(tree)
+        }
       },
-      crate::parse_tree::TreeKind::Literal(_) => Ok(tree),
-      crate::parse_tree::TreeKind::Spine(callee, spine) => {
+      parse_tree::TreeKind::Literal(_) => Ok(tree),
+      parse_tree::TreeKind::Spine(callee, spine) => {
         let callee = Macro::expand(*callee, bindings)?;
         let spine = spine
           .into_iter()
           .map(|tree| Macro::expand(tree, bindings))
           .collect::<Result<_, _>>()?;
-        let tree_kind = crate::parse_tree::TreeKind::Spine(callee.into(), spine);
-        Ok(crate::parse_tree::Tree::new(tree_kind, tree.loc))
+        let tree_kind = parse_tree::TreeKind::Spine(callee.into(), spine);
+        Ok(parse_tree::Tree::new(tree_kind, tree.loc))
       }
-      crate::parse_tree::TreeKind::Binary(op, lhs, rhs) => {
+      parse_tree::TreeKind::Binary(op, lhs, rhs) => {
         let lhs = Macro::expand(*lhs, bindings)?;
         let rhs = Macro::expand(*rhs, bindings)?;
-        let tree_kind = crate::parse_tree::TreeKind::Binary(op, lhs.into(), rhs.into());
-        Ok(crate::parse_tree::Tree::new(tree_kind, tree.loc))
+        let tree_kind = parse_tree::TreeKind::Binary(op, lhs.into(), rhs.into());
+        Ok(parse_tree::Tree::new(tree_kind, tree.loc))
       }
-      crate::parse_tree::TreeKind::Lambda(lhs, rhs) => {
+      parse_tree::TreeKind::Lambda(lhs, rhs) => {
         let lhs = Macro::expand(*lhs, bindings)?;
         let rhs = Macro::expand(*rhs, bindings)?;
-        let tree_kind = crate::parse_tree::TreeKind::Lambda(lhs.into(), rhs.into());
-        Ok(crate::parse_tree::Tree::new(tree_kind, tree.loc))
+        let tree_kind = parse_tree::TreeKind::Lambda(lhs.into(), rhs.into());
+        Ok(parse_tree::Tree::new(tree_kind, tree.loc))
       }
-      crate::parse_tree::TreeKind::Let(bind, value) => {
+      parse_tree::TreeKind::Let(bind, value) => {
         let bind = Macro::expand(*bind, bindings)?;
         let value = Macro::expand(*value, bindings)?;
-        let tree_kind = crate::parse_tree::TreeKind::Let(bind.into(), value.into());
-        Ok(crate::parse_tree::Tree::new(tree_kind, tree.loc))
+        let tree_kind = parse_tree::TreeKind::Let(bind.into(), value.into());
+        Ok(parse_tree::Tree::new(tree_kind, tree.loc))
       }
-      crate::parse_tree::TreeKind::Block(block) => {
+      parse_tree::TreeKind::Block(block) => {
         let block = block
           .into_iter()
           .map(|tree| Macro::expand(tree, bindings))
           .collect::<Result<_, _>>()?;
-        let tree_kind = crate::parse_tree::TreeKind::Block(block);
-        Ok(crate::parse_tree::Tree::new(tree_kind, tree.loc))
+        let tree_kind = parse_tree::TreeKind::Block(block);
+        Ok(parse_tree::Tree::new(tree_kind, tree.loc))
       }
-      crate::parse_tree::TreeKind::Macro(_, _, _) => Err(NestedMacroError {
-        loc: tree.loc.clone(),
-        src: tree.loc.source.clone(),
-      })?,
     }
   }
 }
@@ -162,7 +179,7 @@ trait ToSyntax {
   fn to_syntax(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<ExpandedTree>;
 }
 
-impl ToSyntax for crate::parse_tree::Tree {
+impl ToSyntax for parse_tree::Tree {
   fn to_syntax(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<ExpandedTree> {
     use crate::parse_tree::TreeKind;
 
@@ -180,11 +197,12 @@ impl ToSyntax for crate::parse_tree::Tree {
       TreeKind::Spine(callee, arguments) => match callee.tree_kind {
         TreeKind::Variable(ref name) => match macros.get(name) {
           Some(r#macro) if r#macro.parameters.len() == arguments.len() => {
+            // TODO: bind the defined macros to their names
             let mut bindings = HashMap::new();
             for (bind, tree) in r#macro.parameters.iter().zip(arguments) {
               bindings.insert(bind.clone(), tree);
             }
-            Macro::expand(r#macro.tree.clone(), &bindings)?.to_syntax(macros)
+            Macro::expand(r#macro.tree.clone(), &mut bindings)?.to_syntax(macros)
           }
           Some(r#macro) => Err(MacroArityError {
             parameters: r#macro.parameters.len(),
@@ -212,10 +230,18 @@ impl ToSyntax for crate::parse_tree::Tree {
         lhs.to_syntax(macros)?.into(),
         rhs.to_syntax(macros)?.into(),
       )),
-      TreeKind::Lambda(lhs, rhs) => Ok(Syntax::Lambda(
-        lhs.to_lambda_pattern(macros)?,
-        rhs.to_syntax(macros)?.into(),
-      )),
+      TreeKind::Lambda(lhs, rhs) => {
+        let pat = lhs.to_lambda_pattern(macros)?;
+        let lambda = rhs.to_syntax(macros)?;
+
+        let lambda = pat
+          .into_iter()
+          .rfold(lambda, |x, y| Syntax::Lambda(y, x.into()));
+        // for pat in pat {
+        //   lambda = Syntax::Lambda(pat, lambda.into());
+        // }
+        Ok(lambda)
+      }
       TreeKind::Let(bind, value) => match bind.to_syntax(macros)? {
         Syntax::Variable(name) => Ok(Syntax::Let(name, value.to_syntax(macros)?.into())),
         _ => Err(BindNotValid {
@@ -223,20 +249,6 @@ impl ToSyntax for crate::parse_tree::Tree {
           src: self.loc.source,
         })?,
       },
-      TreeKind::Macro(name, params, tree) => {
-        let mut parameters = vec![];
-        for param in params {
-          match param.tree_kind {
-            TreeKind::Variable(name) => parameters.push(name),
-            _ => Err(BindNotValid {
-              loc: param.loc.clone(),
-              src: param.loc.source,
-            })?,
-          }
-        }
-        macros.insert(name, Macro::new(parameters, *tree));
-        Ok(Syntax::Ext(MacroDefined))
-      }
       TreeKind::Block(block) => {
         let block = block
           .into_iter()
@@ -250,7 +262,7 @@ impl ToSyntax for crate::parse_tree::Tree {
 }
 
 trait ToLambdaPattern {
-  fn to_lambda_pattern(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<LambdaPattern>;
+  fn to_lambda_pattern(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<Vec<Name>>;
 }
 
 #[derive(thiserror::Error, Debug, miette::Diagnostic)]
@@ -264,10 +276,10 @@ pub struct PatternSyntaxError {
   src: crate::loc::Source,
 }
 
-impl ToLambdaPattern for crate::parse_tree::Tree {
-  fn to_lambda_pattern(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<LambdaPattern> {
+impl ToLambdaPattern for parse_tree::Tree {
+  fn to_lambda_pattern(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<Vec<Name>> {
     match self.tree_kind {
-      crate::parse_tree::TreeKind::Variable(name) => match macros.get(&name) {
+      parse_tree::TreeKind::Variable(name) => match macros.get(&name) {
         Some(r#macro) if r#macro.parameters.len() == 0 => {
           r#macro.tree.clone().to_lambda_pattern(macros)
         }
@@ -276,14 +288,14 @@ impl ToLambdaPattern for crate::parse_tree::Tree {
           loc: self.loc.clone(),
           src: self.loc.source,
         })?,
-        None => Ok(LambdaPattern::Variable(name)),
+        None => Ok(vec![name]),
       },
-      crate::parse_tree::TreeKind::Spine(x1, xn) => {
+      parse_tree::TreeKind::Spine(x1, xn) => {
         let trees = std::iter::once(*x1)
           .chain(xn)
           .map(|tree| tree.to_lambda_pattern(macros))
-          .collect::<Result<_, _>>()?;
-        Ok(LambdaPattern::Many(trees))
+          .collect::<Result<Vec<_>, _>>()?;
+        Ok(trees.concat())
       }
       _ => Err(PatternSyntaxError {
         loc: self.loc.clone(),

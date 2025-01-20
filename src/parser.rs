@@ -72,9 +72,16 @@ impl<'src> Parser<'src> {
   }
 
   pub fn parse_program(&mut self) -> ParseResult<crate::parse_tree::Program> {
-    self
-      .many(TokenKind::Eof)
-      .map(|trees| crate::parse_tree::Program { trees })
+    let mut top_levels = vec![];
+    while !self.is(TokenKind::Eof) {
+      top_levels.push(self.top_level()?);
+      if self.is(TokenKind::Eof) {
+        break;
+      }
+      self.expect(TokenKind::Separator)?;
+    }
+    self.expect(TokenKind::Eof)?;
+    Ok(crate::parse_tree::Program { top_levels })
   }
 }
 
@@ -319,7 +326,7 @@ impl<'src> Parser<'src> {
   fn expression(&mut self, prec: Precedence) -> ParseResult<crate::parse_tree::Tree> {
     match self.skip_peek() {
       TokenKind::Let => self.r#let(),
-      TokenKind::Macro if prec == Precedence::None => self.r#macro(),
+      // TokenKind::Macro => self.r#macro(),
       _ => self.infix(prec),
     }
   }
@@ -340,24 +347,31 @@ impl<'src> Parser<'src> {
     })
   }
 
-  fn r#macro(&mut self) -> ParseResult<crate::parse_tree::Tree> {
-    let start = self.expect(TokenKind::Macro)?;
+  fn top_level(&mut self) -> ParseResult<crate::parse_tree::TopLevel> {
+    match self.skip_peek() {
+      TokenKind::Macro => self.r#macro(),
+      _ => self
+        .expression(Precedence::None)
+        .map(crate::parse_tree::TopLevel::Tree),
+    }
+  }
+
+  fn r#macro(&mut self) -> ParseResult<crate::parse_tree::TopLevel> {
+    self.expect(TokenKind::Macro)?;
 
     let (name, _) = self.name()?;
 
     let mut parameters = vec![];
     while !self.is(TokenKind::Equal) {
-      parameters.push(self.primary()?);
+      let (name, _) = self.name()?;
+      parameters.push(name);
     }
     self.expect(TokenKind::Equal)?;
 
     let body = self.expression(Precedence::None.left())?;
-    let loc = start.loc.merge(body.loc.clone());
 
-    Ok(crate::parse_tree::Tree {
-      tree_kind: TreeKind::Macro(name, parameters, body.into()),
-      loc,
-    })
+    let r#macro = crate::parse_tree::TopLevel::Macro(name, parameters, body);
+    Ok(r#macro)
   }
 
   fn many(&mut self, end: TokenKind) -> ParseResult<Vec<crate::parse_tree::Tree>> {
