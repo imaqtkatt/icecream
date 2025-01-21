@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
+  closure_conversion::ClosureConverted,
   loc::{Name, Text},
   parse_tree::Op,
-  syntax::ExpandedTree,
 };
 
 #[derive(Clone)]
@@ -13,7 +13,7 @@ pub enum Value<'c> {
   Bool(bool),
   String(Text),
   Primitive(fn(Value<'c>) -> Value<'c>),
-  Closure(Name, Compiled<'c>, HashMap<Name, Value<'c>>),
+  Closure(Name, Compiled<'c>, Env<'c>),
 }
 
 impl<'c> std::fmt::Debug for Value<'c> {
@@ -50,27 +50,26 @@ pub fn new_env<'c>() -> HashMap<Name, Value<'c>> {
   env
 }
 
+pub type Env<'c> = HashMap<Name, Value<'c>>;
+
 #[derive(Clone)]
-pub struct Compiled<'c>(std::rc::Rc<dyn 'c + Fn(&mut HashMap<Name, Value<'c>>) -> Value<'c>>);
+pub struct Compiled<'c>(std::rc::Rc<dyn 'c + Fn(&mut Env<'c>) -> Value<'c>>);
 
 impl<'c> Compiled<'c> {
-  pub fn new(closure: impl 'c + Fn(&mut HashMap<Name, Value<'c>>) -> Value<'c>) -> Self {
+  pub fn new(closure: impl 'c + Fn(&mut Env<'c>) -> Value<'c>) -> Self {
     Self(std::rc::Rc::new(closure))
   }
 
-  pub fn run(&self, env: &mut HashMap<Name, Value<'c>>) -> Value<'c> {
+  pub fn run(&self, env: &mut Env<'c>) -> Value<'c> {
     self.0(env)
   }
 }
 
 // just to be able to run early
 
-pub fn compile<'c>(tree: &'c ExpandedTree) -> Compiled<'c> {
+pub fn compile<'c>(tree: &'c ClosureConverted) -> Compiled<'c> {
   match tree {
-    crate::syntax::Syntax::Variable(name) => Compiled::new(move |env| {
-      dbg!(&env);
-      env[dbg!(name)].clone()
-    }),
+    crate::syntax::Syntax::Variable(name) => Compiled::new(move |env| env[name].clone()),
 
     crate::syntax::Syntax::Literal(literal) => Compiled::new(move |_| match &literal {
       crate::parse_tree::Literal::Number(num) => Value::Number(*num),
@@ -84,8 +83,7 @@ pub fn compile<'c>(tree: &'c ExpandedTree) -> Compiled<'c> {
 
       Compiled::new(move |env| match callee.run(env) {
         Value::Primitive(f) => f(argument.run(env)),
-        Value::Closure(param, body, env) => {
-          let mut env = env.clone();
+        Value::Closure(param, body, mut env) => {
           let argument = argument.run(&mut env);
           env.insert(param.clone(), argument);
           body.run(&mut env)
@@ -116,10 +114,7 @@ pub fn compile<'c>(tree: &'c ExpandedTree) -> Compiled<'c> {
       })
     }
 
-    crate::syntax::Syntax::Lambda(bind, value) => {
-      let value = compile(&*value);
-      Compiled::new(move |env| Value::Closure(bind.clone(), value.clone(), env.clone()))
-    }
+    crate::syntax::Syntax::Lambda(..) => unreachable!("closure_conversion"),
 
     crate::syntax::Syntax::Let(bind, value) => {
       let value = compile(&*value);
@@ -142,13 +137,23 @@ pub fn compile<'c>(tree: &'c ExpandedTree) -> Compiled<'c> {
       })
     }
 
-    crate::syntax::Syntax::Ext(()) => unreachable!(),
+    crate::syntax::Syntax::Ext(closure) => {
+      let value = compile(&*closure.body);
+      Compiled::new(move |env| {
+        let mut new_env = Env::new();
+        for capture in &closure.captures {
+          let captured = env[capture].clone();
+          new_env.insert(capture.clone(), captured);
+        }
+        Value::Closure(closure.name.clone(), value.clone(), new_env)
+      })
+    }
   }
 }
 
 #[cfg(test)]
 mod test {
-  use crate::{lexer::parse_from_source, loc::Source, syntax};
+  use crate::{closure_conversion, lexer::parse_from_source, loc::Source, syntax};
 
   #[test]
   fn compiler_test() {
@@ -168,7 +173,11 @@ print (fst 1 3)
     );
     let program = parse_from_source(source).unwrap();
     let expanded = syntax::program_to_expanded_tree(program).unwrap();
-    let compiled = super::compile(&expanded);
+    let closure_converted = {
+      let mut scope = closure_conversion::Scope::empty();
+      closure_conversion::closure_convert(expanded, &mut scope).unwrap()
+    };
+    let compiled = super::compile(&closure_converted);
 
     let mut env = super::new_env();
     compiled.run(&mut env);

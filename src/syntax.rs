@@ -14,12 +14,6 @@ pub enum Syntax<Id = crate::loc::Name, Ext = ()> {
   Ext(Ext),
 }
 
-#[derive(Debug)]
-pub enum LambdaPattern<Id = crate::loc::Name> {
-  Variable(Id),
-  Many(Vec<LambdaPattern>),
-}
-
 pub type ExpandedTree = Syntax<crate::loc::Name, ()>;
 
 pub fn program_to_expanded_tree(program: parse_tree::Program) -> miette::Result<ExpandedTree> {
@@ -51,26 +45,6 @@ impl Macro {
     Self { parameters, tree }
   }
 }
-
-// #[derive(Default)]
-// pub struct Environment {
-//   bindings: HashMap<Name, crate::parse_tree::Tree>,
-//   namegen: usize,
-// }
-
-// impl Environment {
-//   pub fn new() -> Self {
-//     Self::default()
-//   }
-
-//   pub fn insert(&mut self, name: Name, tree: crate::parse_tree::Tree) {
-//     self.bindings.insert(name, tree);
-//   }
-
-//   pub fn get(&mut self, name: &Name) -> Option<&crate::parse_tree::Tree> {
-//     self.bindings.get(name)
-//   }
-// }
 
 #[derive(thiserror::Error, Debug, miette::Diagnostic)]
 #[diagnostic()]
@@ -231,15 +205,12 @@ impl ToSyntax for parse_tree::Tree {
         rhs.to_syntax(macros)?.into(),
       )),
       TreeKind::Lambda(lhs, rhs) => {
-        let pat = lhs.to_lambda_pattern(macros)?;
+        let pat = lhs.to_lambda_params(macros)?;
         let lambda = rhs.to_syntax(macros)?;
 
         let lambda = pat
           .into_iter()
           .rfold(lambda, |x, y| Syntax::Lambda(y, x.into()));
-        // for pat in pat {
-        //   lambda = Syntax::Lambda(pat, lambda.into());
-        // }
         Ok(lambda)
       }
       TreeKind::Let(bind, value) => match bind.to_syntax(macros)? {
@@ -261,8 +232,8 @@ impl ToSyntax for parse_tree::Tree {
   }
 }
 
-trait ToLambdaPattern {
-  fn to_lambda_pattern(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<Vec<Name>>;
+trait ToLambdaParams {
+  fn to_lambda_params(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<Vec<Name>>;
 }
 
 #[derive(thiserror::Error, Debug, miette::Diagnostic)]
@@ -276,12 +247,12 @@ pub struct PatternSyntaxError {
   src: crate::loc::Source,
 }
 
-impl ToLambdaPattern for parse_tree::Tree {
-  fn to_lambda_pattern(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<Vec<Name>> {
+impl ToLambdaParams for parse_tree::Tree {
+  fn to_lambda_params(self, macros: &mut HashMap<Name, Macro>) -> miette::Result<Vec<Name>> {
     match self.tree_kind {
       parse_tree::TreeKind::Variable(name) => match macros.get(&name) {
         Some(r#macro) if r#macro.parameters.len() == 0 => {
-          r#macro.tree.clone().to_lambda_pattern(macros)
+          r#macro.tree.clone().to_lambda_params(macros)
         }
         Some(r#macro) => Err(MacroArityError {
           parameters: r#macro.parameters.len(),
@@ -293,7 +264,7 @@ impl ToLambdaPattern for parse_tree::Tree {
       parse_tree::TreeKind::Spine(x1, xn) => {
         let trees = std::iter::once(*x1)
           .chain(xn)
-          .map(|tree| tree.to_lambda_pattern(macros))
+          .map(|tree| tree.to_lambda_params(macros))
           .collect::<Result<Vec<_>, _>>()?;
         Ok(trees.concat())
       }

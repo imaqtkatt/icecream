@@ -58,7 +58,7 @@ impl Source {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Name(std::rc::Rc<String>);
+pub struct Name(std::sync::Arc<String>);
 
 impl std::borrow::Borrow<str> for Name {
   fn borrow(&self) -> &str {
@@ -74,7 +74,7 @@ impl std::borrow::Borrow<String> for Name {
 
 impl From<String> for Name {
   fn from(value: String) -> Self {
-    Self(std::rc::Rc::new(value))
+    Self(std::sync::Arc::new(value))
   }
 }
 

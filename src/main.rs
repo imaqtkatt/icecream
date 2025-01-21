@@ -1,3 +1,4 @@
+mod closure_conversion;
 mod compiler;
 pub mod lexer;
 pub mod loc;
