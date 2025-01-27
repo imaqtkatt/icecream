@@ -37,8 +37,8 @@ impl Scope {
     scope
   }
 
-  fn captures(self) -> HashSet<Name> {
-    self.captures
+  fn explode(self) -> (Option<Box<Self>>, HashSet<Name>) {
+    (self.outer, self.captures)
   }
 
   fn new(outer: &Self) -> Self {
@@ -90,10 +90,12 @@ pub fn closure_convert(tree: ExpandedTree, scope: &mut Scope) -> miette::Result<
       closure_convert(*rhs, scope)?.into(),
     )),
     Syntax::Lambda(name, body) => {
-      let mut scope = Scope::new(scope);
-      scope.define(&name);
-      let body = closure_convert(*body, &mut scope)?;
-      let captures = scope.captures();
+      let mut lambda_scope = Scope::new(scope);
+      lambda_scope.define(&name);
+      let body = closure_convert(*body, &mut lambda_scope)?;
+      let (this, captures) = lambda_scope.explode();
+      let Some(this) = this else { unreachable!() };
+      *scope = *this;
 
       Ok(Syntax::Ext(Lambda {
         name,
